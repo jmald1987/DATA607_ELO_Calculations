@@ -1,0 +1,12 @@
+---
+title: "ELO Calculation"
+author: "Johnny Maldonado"
+date: "09/30/2026"
+output: html_document
+---
+
+## Introduction
+The purpose of this assignment is to compare chess players’ actual tournament scores with their expected scores based on pre-tournament Elo ratings. I will use readr to import the Project 1 tournament data, stringr to extract player ratings and round results, and tidyr to organize the individual matchups. Using dplyr, I will match each player with their opponents’ ratings and apply the Elo expected-score formula explained in Nate Solon’s “How Elo Ratings Actually Work”. I will then total each player’s expected points and compare them with actual scores to identify the five players who most overperformed and the five who most underperformed.
+
+## Source
+Solon, Nate. “How Elo Ratings Actually Work.” Chess.com, 12 Dec. 2022, www.chess.com/blog/NateSolon/how-elo-ratings-actually-work.

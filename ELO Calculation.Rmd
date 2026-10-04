@@ -6,7 +6,179 @@ output: html_document
 ---
 
 ## Introduction
+
 The purpose of this assignment is to compare chess players’ actual tournament scores with their expected scores based on pre-tournament Elo ratings. I will use readr to import the Project 1 tournament data, stringr to extract player ratings and round results, and tidyr to organize the individual matchups. Using dplyr, I will match each player with their opponents’ ratings and apply the Elo expected-score formula explained in Nate Solon’s “How Elo Ratings Actually Work”. I will then total each player’s expected points and compare them with actual scores to identify the five players who most overperformed and the five who most underperformed.
 
+
+## Libraries
+
+I use the same packages as Project 1 to read the tournament file, extract player information, and organize the rounds.
+
+```{r libraries, message=FALSE}
+library(readr)
+library(stringr)
+library(tidyr)
+library(dplyr)
+```
+
+## Import the Tournament Data
+
+The CSV created in Project 1 contains each player's total points, pre-tournament rating, and average opponent rating. However, Assignment 5B requires calculating an expected score against each individual opponent. Using an average opponent rating in the Elo formula would not produce the same result as calculating and adding the expected points for each matchup. Therefore, I use the original tournament text file because it retains the opponent IDs for every round, which I can match to each opponent's rating. I import this file directly from my GitHub repository.
+
+```{r import-data}
+tournament_data <- read_lines("https://raw.githubusercontent.com/jmald1987/DATA607_Chess_Tournament_Results/refs/heads/main/tournamentinfo.txt")
+head(tournament_data)
+```
+## Extract Player Information
+
+As in Project 1, I separate the player rows from the state and rating rows. The pipe character separates the fields. I extract the number after `R:` as the pre-tournament rating, leaving out provisional-rating suffixes.
+
+```{r player-information}
+player_lines <- tournament_data[str_detect(tournament_data, "^\\s*\\d+\\s*\\|")]
+rating_lines <- tournament_data[str_detect(tournament_data, "^\\s*[A-Z]{2}\\s*\\|")]
+player_parts <- str_split_fixed(player_lines, "\\|", 11)
+rating_parts <- str_split_fixed(rating_lines, "\\|", 11)
+players <- tibble(
+  player_id = as.integer(str_trim(player_parts[, 1])),
+  player_name = str_trim(player_parts[, 2]),
+  total_points = as.numeric(str_trim(player_parts[, 3])),
+  pre_rating = as.integer(str_match(rating_parts[, 2], "R:\\s*(\\d+)")[, 2]),
+  round_1 = str_trim(player_parts[, 4]),
+  round_2 = str_trim(player_parts[, 5]),
+  round_3 = str_trim(player_parts[, 6]),
+  round_4 = str_trim(player_parts[, 7]),
+  round_5 = str_trim(player_parts[, 8]),
+  round_6 = str_trim(player_parts[, 9]),
+  round_7 = str_trim(player_parts[, 10])
+)
+head(players)
+```
+
+## Organize the Individual Rounds
+
+I use `pivot_longer()` to place the seven round columns into rows. The first letter gives the result, and the number gives the opponent's player ID. For example, `W 39` means a win against player 39.
+
+```{r organize-rounds}
+rounds <- players %>%
+  pivot_longer(
+    cols = starts_with("round_"),
+    names_to = "round",
+    values_to = "round_result"
+  ) %>%
+  mutate(
+    result = str_sub(round_result, 1, 1),
+    opponent_id = as.integer(str_extract(round_result, "\\d+"))
+  )
+head(rounds)
+```
+
+## Match Opponents and Calculate Actual Points
+
+I keep played games marked W, D, or L. A win earns 1 point, a draw earns 0.5 points, and a loss earns 0 points. I then join each opponent's ID to their pre-tournament rating.
+
+Rounds marked H, B, X, or U do not list a played opponent in this file. These include byes, a forfeit win, and unplayed rounds. I exclude them from both actual and expected played-game scores. I retain the official total separately so any points received without playing remain visible.
+
+```{r match-opponents}
+opponent_ratings <- players %>%
+  select(opponent_id = player_id, opponent_rating = pre_rating)
+games <- rounds %>%
+  filter(result %in% c("W", "D", "L")) %>%
+  left_join(opponent_ratings, by = "opponent_id") %>%
+  mutate(
+    actual_points = case_when(
+      result == "W" ~ 1,
+      result == "D" ~ 0.5,
+      result == "L" ~ 0
+    )
+  )
+games %>%
+  select(player_name, round, opponent_id, pre_rating, opponent_rating, actual_points) %>%
+  head()
+```
+
+
+## Calculate Expected Points
+
+I use the expected-score formula described by Solon (2022):
+
+$$
+\text{Expected points} = \frac{1}{1 + 10^{(\text{opponent rating} - \text{player rating})/400}}
+$$
+
+The formula compares the two ratings. Equal ratings give 0.5 expected points. A higher-rated player is expected to earn more than 0.5 points against a lower-rated opponent. I use the pre-tournament ratings for every game and calculate the expectation against each opponent separately.
+
+```{r expected-points}
+games <- games %>%
+  mutate(
+    expected_points = 1 / (1 + 10^((opponent_rating - pre_rating) / 400))
+  )
+games %>%
+  select(player_name, round, opponent_rating, actual_points, expected_points) %>%
+  head()
+```
+
+## Total Actual and Expected Scores
+
+I add each player's actual and expected points across the games they played. The difference is actual score minus expected score. Positive differences indicate overperformance, and negative differences indicate underperformance.
+
+```{r total-scores}
+player_scores <- games %>%
+  group_by(player_id, player_name, pre_rating, total_points) %>%
+  summarise(
+    games_played = n(),
+    actual_score = sum(actual_points),
+    expected_score = sum(expected_points),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    nonplayed_points = total_points - actual_score,
+    difference = actual_score - expected_score
+  )
+player_scores
+```
+
+The total_points column is the official tournament total. The actual_score column contains points from played games. The nonplayed_points column shows the difference between these totals. For example, Larry Hodge has 2 official points, but 1 of those points came from a bye, leaving 1 point from played games.
+
+## Five Greatest Overperformers
+
+I sort the differences from largest to smallest and select the first five players. I round only after selecting the rankings so rounding does not affect the order.
+
+```{r overperformers}
+overperformers <- player_scores %>%
+  arrange(desc(difference), player_name) %>%
+  slice_head(n = 5) %>%
+  select(player_name, pre_rating, games_played, actual_score, expected_score, difference) %>%
+  mutate(
+    expected_score = round(expected_score, 3),
+    difference = round(difference, 3)
+  )
+overperformers
+```
+
+Aditya Bajaj had the largest positive difference, scoring 6 points compared with approximately 1.945 expected points, a difference of 4.055. The other four greatest overperformers were Zachary James Houghton, Anvit Rao, Jacob Alexander Lavalley, and Stefano Lee.
+
+## Five Greatest Underperformers
+
+I sort the differences from smallest to largest to identify the players who scored furthest below expectations.
+
+```{r underperformers}
+underperformers <- player_scores %>%
+  arrange(difference, player_name) %>%
+  slice_head(n = 5) %>%
+  select(player_name, pre_rating, games_played, actual_score, expected_score, difference) %>%
+  mutate(
+    expected_score = round(expected_score, 3),
+    difference = round(difference, 3)
+  )
+underperformers
+```
+
+Loren Schwiebert had the largest negative difference, scoring 3.5 points compared with approximately 6.276 expected points, a difference of -2.776. The other four greatest underperformers were George Avery Jones, Larry Hodge, Jared Ge, and Rishi Shetty.
+
+## Conclusion
+
+The Elo formula allowed me to compare each player's results with expectations based on the opponents they faced. Aditya Bajaj exceeded expectations by the largest amount, while Loren Schwiebert fell below expectations by the largest amount. These comparisons describe performance relative to ratings in this tournament, rather than simply ranking players by total points.
+
 ## Source
+
 Solon, Nate. “How Elo Ratings Actually Work.” Chess.com, 12 Dec. 2022, www.chess.com/blog/NateSolon/how-elo-ratings-actually-work.
